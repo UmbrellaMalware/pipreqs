@@ -48,7 +48,6 @@ import requests
 from yarg import json2package
 from yarg.exceptions import HTTPError
 
-from pipreqs import __version__
 
 REGEXP = [
     re.compile(r'^import (.+)$'),
@@ -91,10 +90,10 @@ def get_all_imports(
         path, encoding=None, extra_ignore_dirs=None, follow_links=True):
     imports = set()
     raw_imports = set()
-    candidates = []
+    candidates = set()
+    delete_from_candidates = set()
     ignore_errors = False
     ignore_dirs = [".hg", ".svn", ".git", ".tox", "__pycache__", "env", "venv"]
-
     if extra_ignore_dirs:
         ignore_dirs_parsed = []
         for e in extra_ignore_dirs:
@@ -104,12 +103,11 @@ def get_all_imports(
     walk = os.walk(path, followlinks=follow_links)
     for root, dirs, files in walk:
         dirs[:] = [d for d in dirs if d not in ignore_dirs]
-
-        candidates.append(os.path.basename(root))
+        candidates.add(os.path.basename(root))
         files = [fn for fn in files if os.path.splitext(fn)[1] == ".py"]
-
-        candidates += [os.path.splitext(fn)[0] for fn in files]
+        candidates.update({os.path.splitext(fn)[0] for fn in files})
         for file_name in files:
+            name_without_ext = os.path.splitext(file_name)[0]
             file_name = os.path.join(root, file_name)
             with open(file_name, "r", encoding=encoding) as f:
                 contents = f.read()
@@ -118,8 +116,12 @@ def get_all_imports(
                 for node in ast.walk(tree):
                     if isinstance(node, ast.Import):
                         for subnode in node.names:
+                            if subnode.name in candidates and subnode.name == name_without_ext:
+                                delete_from_candidates.add(subnode.name)
                             raw_imports.add(subnode.name)
                     elif isinstance(node, ast.ImportFrom):
+                        if node.module in candidates and node.module == name_without_ext:
+                            delete_from_candidates.add(node.module)
                         raw_imports.add(node.module)
             except Exception as exc:
                 if ignore_errors:
@@ -130,6 +132,7 @@ def get_all_imports(
                     logging.error("Failed on file: %s" % file_name)
                     raise exc
 
+    candidates = candidates - delete_from_candidates
     # Clean up imports
     for name in [n for n in raw_imports if n]:
         # Sanity check: Name could have been None if the import
